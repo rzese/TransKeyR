@@ -856,6 +856,7 @@ def main():
     pretrained_model = models.resnet50()
 
     # carico da file i pesi pre addestrati su IMAGENET1K_V1
+    # (Su cluster Coka non posso utilizzare il comando "weights=ResNet50_Weights.IMAGENET1K_V1")
     path_to_pth_file = 'resnet50.pth'
     #pretrained_model = models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
     pretrained_model.load_state_dict(torch.load(path_to_pth_file))
