@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Modello TransKey</title>
+        <link rel="icon" type="image/jpg" href="{{ url_for('static', filename='favicon.jpg') }}"> 
+        <link rel="stylesheet" type="text/css" href="/static/style.css">  <!-- CSS link -->
+    </head>
+    <body>
+        <div class="title-container">
+            <div class="title-wrapper">
+                <h1><a href="/">Predizione punti cefalometrici</a></h1>
+            </div>
+        </div>
+        <h3 class="upload-title">Carica un'immagine</h3>
+        <form action="/predict" method="post" enctype="multipart/form-data">
+            <input type="file" name="image" multiple>
+            <input type="submit" value="Predici">
+        </form>      
+        {% if error_message %}
+            <div id="error-message">
+                <p>{{ error_message }}</p>
+            </div>
+        {% endif %}
+        {% if predictions %}
+        {% for image_predictions, coordinates, txt_name, image_url in zip(predictions, coordinates, txt_name, image_urls) %}
+        <div class="model-prediction">
+            <div class="prediction-text">
+                <div class="image-container image-container-1">
+                <p>Keypoint predetti</p>
+                <img class="prediction-image" src="{{ image_predictions }}" alt="Keypoint predetti">
+                </div>
+            </div>
+            <div class="prediction-images">
+                <div class="image-container image-container-1">
+                    <p>Foto originale</p>
+                    <img class="prediction-image" src="{{ image_url }}" alt="Foto originale">
+                </div>
+                
+            </div>
+            <div class="prediction-images">
+                <div class="image-container image-container-5">
+                    <p>Coordinate scalate keypoint predetti per l'immagine {{txt_name}}</p>
+                    <div>
+                        <pre>{{ coordinates }}</pre>
+                    </div>
+                </div>
+                
+            </div>
+            
+            
+            </div>
+        </div>
+        </div>
+    {% endfor %}
+{% endif %}
+        
+        <script src="/static/script.js"></script>
+    </body>
+</html>
