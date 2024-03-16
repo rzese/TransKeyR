@@ -913,7 +913,7 @@ def main():
     
 
     # Parametri per l'early stopping
-    patience = 3  
+    patience = 10  
     best_val_loss = float("inf")  
     epochs_no_improve = 0  # Contatore delle epoche senza miglioramento
     early_stop = False  # Flag per interrompere l'addestramento
