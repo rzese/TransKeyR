@@ -138,14 +138,14 @@ def main():
 
     img_mod, coordinates, widthO, heightO = make_prediction(model, file_path, mean, std, H, W)
     coordinates_str = '\n'.join([f"Key {i+1}: {x:.3f} {y:.3f}" for i, (x,y) in enumerate(coordinates)])
-
+    print(coordinates_str)
     plt.imshow(img_mod.astype('uint8'))  
     plt.axis('off')  
     plt.show()
 
     print(f"\nCoordinate predette scalate secondo la dimensione originale dell'immagine ({widthO} ,{heightO}):")
     
-    print(coordinates_str)
+    
 
     
 
