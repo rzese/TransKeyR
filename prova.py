@@ -30,13 +30,14 @@ resnet_spec = {
 block_class, layers = resnet_spec[50]
 
 
-TransPoseR = TransKeyR
+#TransPoseR = TransKeyR
 
 # Carico il modello TransKeyR
 model = TransKeyR(block_class, layers, BN_MOMENTUM, W, H)
 
 # Carico i pesi del modello
-model = torch.load('best_saved_model.pth', map_location=torch.device('cpu'))
+state_dict = torch.load('best_saved_model_TransKeyR.pth', map_location=torch.device('cpu'))
+model.load_state_dict(state_dict)
 model.eval()
 
 
@@ -133,6 +134,14 @@ def make_prediction(model, image_dir):
     return modified_image_path, predicted_keypoints, os.path.basename(image_dir)
 
    
+# Funzione per eliminare le foto temporanee per le predizioni
+def delete_old_images():
+    folder = 'static/images/'
+    for filename in os.listdir(folder):
+        file_path = os.path.join(folder, filename)
+        if os.path.isfile(file_path) or os.path.islink(file_path):
+            os.unlink(file_path)
+
 
 # Funzione personalizzata per il filtro zip nel template
 def custom_zip(*args):
@@ -150,6 +159,8 @@ def home():
 @app.route('/predict', methods=['POST'])
 def predict():
     if request.method == 'POST':
+        # Elimino le foto predette in precedenza
+        delete_old_images()
 
         images = request.files.getlist('image')
 
