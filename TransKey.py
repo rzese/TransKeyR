@@ -30,7 +30,7 @@ import yaml
 import torchvision.models as models
 import matplotlib.patches as mpatches
 
-from sklearn.model_selection import KFold
+
 
 os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
@@ -358,8 +358,7 @@ class TransKeyR(nn.Module):
                 self.pe_w = w // 8
                 length = self.pe_h * self.pe_w
             if pe_type == 'learnable':
-                self.pos_embedding = nn.Parameter(
-                    torch.randn(length, 1, d_model))
+                self.pos_embedding = nn.Parameter(torch.randn(length, d_model))
             else:
                 self.pos_embedding = nn.Parameter(
                     self._make_sine_position_embedding2(d_model),
@@ -845,6 +844,7 @@ def main():
 
     block_class, layers = resnet_spec[50]
 
+
     # Carico il modello TransKeyR
     model = TransKeyR(block_class, layers, BN_MOMENTUM, W, H)
 
@@ -1094,7 +1094,7 @@ def main():
 
     if best_model_state:
         model.load_state_dict(best_model_state)
-    torch.save(model, 'best_saved_model.pth')
+    torch.save(model.state_dict(), 'best_saved_model_TransKeyR.pth')
 
 
 
