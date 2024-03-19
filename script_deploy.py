@@ -10,7 +10,7 @@ import cv2
 from torchvision import transforms
 import matplotlib.pyplot as plt
 
-TransPoseR = TransKeyR
+#TransPoseR = TransKeyR
 
 
 class Normalize(object):
@@ -121,7 +121,8 @@ def main():
     model = TransKeyR(block_class, layers, BN_MOMENTUM, W, H)
 
     # Carico i pesi del modello
-    model = torch.load('best_saved_model.pth', map_location=torch.device('cpu'))
+    state_dict = torch.load('best_saved_model_TransKeyR.pth', map_location=torch.device('cpu'))
+    model.load_state_dict(state_dict)
     model.eval()
 
     mean = 0.485 * 255
