@@ -79,14 +79,13 @@ class KeypointsDataset(Dataset):
                 txt_path = os.path.join(self.root_dir, txt_name)
                 img_path = os.path.join(self.root_dir, filename)
                 
-
+                # Controllo per escludere immagini che hanno più di 14 punti di interesse 
+                # o meno di 14 punti all'interno del file delle coordinate .txt
                 if os.path.exists(txt_path):
                     data = pd.read_csv(txt_path, delimiter='\t' or ',')
                     if len(data.index) == 14:
                         self.samples.append((img_path, txt_path))
         
-        #self.samples = sorted(self.samples, key=lambda x: int(re.findall( r'\d+', os.path.basename(x[0])) [0]) ) 
-        #print(self.samples)
                         
     def __len__(self):
         return len(self.samples)
@@ -260,13 +259,13 @@ class Bottleneck(nn.Module):
         super(Bottleneck, self).__init__()
         self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=1, bias=False)
         self.bn1 = nn.BatchNorm2d(planes, momentum=BN_MOMENTUM)
-        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride,
-                               padding=1, bias=False)
+
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(planes, momentum=BN_MOMENTUM)
-        self.conv3 = nn.Conv2d(planes, planes * self.expansion, kernel_size=1,
-                               bias=False)
-        self.bn3 = nn.BatchNorm2d(planes * self.expansion,
-                                  momentum=BN_MOMENTUM)
+
+        self.conv3 = nn.Conv2d(planes, planes * self.expansion, kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(planes * self.expansion, momentum=BN_MOMENTUM)
+
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stride = stride
@@ -299,30 +298,31 @@ class TransKeyR(nn.Module):
         self.inplanes = 64
         self.deconv_with_bias = False
 
-        d_model = 256 
+        d_model = 512 
         dim_feedforward = 1024
-        encoder_layers_num = 3
+        encoder_layers_num = 4
         n_head = 8
-        pos_embedding_type = 'learnable'
+        pos_embedding_type = 'sine'
         w, h = [W, H] 
 
         super(TransKeyR, self).__init__()
-        self.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3,
-                               bias=False)
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(64, momentum=BN_MOMENTUM)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+
         self.layer1 = self._make_layer(block, 64, layers[0], BN_MOMENTUM)
         self.layer2 = self._make_layer(block, 128, layers[1], BN_MOMENTUM, stride=2)
         
         self.reduce = nn.Conv2d(self.inplanes, d_model, 1, bias=False)
+
         self._make_position_embedding(w, h, d_model, pos_embedding_type)
 
         encoder_layer = TransformerEncoderLayer(
             d_model=d_model,
             nhead=n_head,
             dim_feedforward=dim_feedforward,
-            activation='relu',
+            activation='gelu',
             batch_first=True
         )
 
@@ -332,10 +332,11 @@ class TransKeyR(nn.Module):
         )
 
         self.inplanes = d_model
+
         self.deconv_layers = self._make_deconv_layer(
-            1,   #NUM_DECONV_LAYERS 
-            [256],  # NUM_DECONV_FILTERS
-            [4],  # NUM_DECONV_KERNELS'
+            1,          # Layers
+            [d_model],  # Filtri
+            [4],        # Kernel
             BN_MOMENTUM
         )
 
@@ -348,7 +349,7 @@ class TransKeyR(nn.Module):
         )
 
 
-    def _make_position_embedding(self, w, h, d_model, pe_type='learnable'):
+    def _make_position_embedding(self, w, h, d_model, pe_type):
         assert pe_type in ['none', 'learnable', 'sine']
         if pe_type == 'none':
             self.pos_embedding = None
@@ -489,28 +490,45 @@ class TransKeyR(nn.Module):
     
     def forward(self, x):
         
+        # Passaggio attraverso il primo strato convoluzionale
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
         x = F.dropout(x, p=0.6, training=self.training)
         x = self.maxpool(x)
 
+        # Passaggio attraverso i blocchi ResNet50
         x = self.layer1(x)
         x = F.dropout(x, p=0.5, training=self.training)  
         x = self.layer2(x)
-        x = F.dropout(x, p=0.5, training=self.training)  
+        x = F.dropout(x, p=0.5, training=self.training) 
+
+        # Riduzione del nuemro dei canali a d_model
         x = self.reduce(x)
 
+        # Reshape per adattare i dati all'encoder del Trasformer
         bs, c, h, w = x.shape
         x = x.flatten(2).permute(2, 0, 1)
+
+        # Applicazione del positional encoding
+        if self.pos_embedding is not None:
+            pos_embed = self.pos_embedding.view(h * w, 1, c).repeat(1, bs, 1)
+            x = x + pos_embed
+
+        # Passaggio dall'encoder del Trasformer
         x = self.global_encoder(x)
         x = F.dropout(x, p=0.5, training=self.training)  
+
+        # Reshape e passaggio al layer di deconvoluzione
         x = x.permute(1, 2, 0).contiguous().view(bs, c, h, w)
         x = self.deconv_layers(x)
         x = F.dropout(x, p=0.5, training=self.training)
 
+        # Layer finale per produrre le mappe di calore
         hm = self.final_layer(x)
         hm = torch.sigmoid(hm)
+
+        # Estrazione dei punti chiave dalle mappe di calore
         x, max_v = self.find_keypoints(hm)
 
         return x, hm, max_v
@@ -565,7 +583,7 @@ def stampa_mappa(heatMap, image, t):
                 
         fig, axs = plt.subplots(nrows, ncols, figsize=(15, 15))
         target_size = image[img_index].shape[:2]  # Dimensione dell'immagine
-        print("target_size:   ", target_size)
+        #print("target_size:   ", target_size)
 
 
         for idx, ax in enumerate(axs.flat):
@@ -751,17 +769,15 @@ def stampa_metric_key(metric_key):
 
 
 
-
-
 def main():
     mps_device = init_gpu()
 
     H, W = 256, 256
-    BATCH=2
-
+    
     #Posizione immagini
     img_root = 'dataset_teleradiografie_14punti'
 
+    #valore medio e dev standard di ImageNet
     mean = 0.485 * 255
     std = 0.229 * 255
 
@@ -773,10 +789,11 @@ def main():
     ])
 
     #Creazione Dataset 
-    transformed_dataset = KeypointsDataset(root_dir=img_root,
-                                                transform=data_transform)
+    transformed_dataset = KeypointsDataset(root_dir=img_root, transform=data_transform)
 
-    
+
+    BATCH=2
+
     dataset_size = len(transformed_dataset)
     print("Dataset tot: ", dataset_size)
     train_size = int(0.7 * dataset_size)
@@ -791,7 +808,7 @@ def main():
 
 
     # Creo un DataLoader per esplorare i dati
-    train_loader = DataLoader(transformed_dataset, batch_size=BATCH, shuffle=True)
+    #train_loader = DataLoader(transformed_dataset, batch_size=BATCH, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=True)
 
@@ -814,7 +831,7 @@ def main():
     dataset_dataAug = KeypointsDataset(root_dir=img_root, transform=transform3)
 
 
-    print("Dataset tot Augmentato: ", dataset_size)
+    print("Dataset tot: ", dataset_size)
     train_size = int(0.6 * dataset_size)
     print("Train size Augmentato: ", train_size)
     val_size = int(0.15 * dataset_size)
@@ -903,24 +920,23 @@ def main():
     
 
 
-    num_epochs = 80 #Numero di epoche
+    num_epochs = 50 #Numero di epoche
     train_losses = []
     val_losses = []
     metric_history = []
     metric_mre = []
     metric_sdr = []
     metric_key = []
+
     
 
     # Parametri per l'early stopping
-    patience = 10  
+    patience = 8 
     best_val_loss = float("inf")  
     epochs_no_improve = 0  # Contatore delle epoche senza miglioramento
     early_stop = False  # Flag per interrompere l'addestramento
     best_model_state = None
 
-    # Range per inizializzare la mappa di calore
-    current_range = int(12)
     
     model = model.to(mps_device)
 
@@ -931,8 +947,7 @@ def main():
             model.train()  
             
             total_train_loss = 0
-            #print(current_range)
-            #current_range = compute_range(epoch, current_range)
+           
             for batch_index, batch in enumerate(train_dataAug):  
                 if not batch:
                     continue
@@ -946,7 +961,7 @@ def main():
                 # Azzero i gradienti dell'ottimizzatore
                 optimizer.zero_grad()
                 
-                outputs, hm, indi = model(inputs)
+                outputs, hm, _ = model(inputs)
                 hm = hm.float().to(mps_device)
                 #print(hm.shape)
                 
@@ -981,11 +996,12 @@ def main():
                     inputs = batch['image'].float().to(mps_device)
                     true_keypointsV = batch['keypoints'].float().to(mps_device)
 
-                    true_heatmapsV = create_heatmaps_batch(true_keypointsV,128, 128, 14, 6)
+                    true_heatmapsV = create_heatmaps_batch(true_keypointsV, 128, 128, 14, 6)
                     true_heatmapsV = torch.from_numpy(true_heatmapsV).float().to(mps_device)
 
-                   
+                    
                     outputs, hm, _ = model(inputs)
+                    
                     outputs = (outputs).float().to(mps_device)
                     
                     loss = (criterion(outputs, true_keypointsV)*100)
@@ -997,7 +1013,7 @@ def main():
                    
                     distanze_batch = torch.norm(outputs - true_keypointsV, dim=-1)
 
-                    # Soglia utilizzata per il calcolo della SDR
+                    # Soglia utilizzata per il calcolo della SDR -- 2 pixel
                     soglia = 2  
                     punteggi_batch = (distanze_batch <= soglia).float()
                     
@@ -1008,7 +1024,8 @@ def main():
                     val_mre += calcola_mre(outputs,true_keypointsV)
                     
                     val_sdr += calcola_sdr(outputs,true_keypointsV,soglia)
-                    
+ 
+    
             # Concatena le distanze di tutti i batch
             distanze_totali = torch.cat(distanze_totali, dim=0)
 
@@ -1050,7 +1067,6 @@ def main():
                     break
 
     scheduler.step(val_loss_avg)
-        
 
     stampa_mappa(hm,inputs, 0)
     stampa_mappa(true_heatmapsV,inputs, 1)
@@ -1082,7 +1098,7 @@ def main():
     plt.plot(metric_sdr, label = 'sdr')
     plt.xlabel('Epochs')
     plt.ylabel('Percentage')
-    plt.title('Metric Success Detection Rate')
+    plt.title('Metric Successful Detection Rate')
     plt.legend()
     plt.savefig('graficoSdr.png')
     plt.close()
