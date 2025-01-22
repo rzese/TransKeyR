@@ -26,7 +26,7 @@ from collections import OrderedDict
 import copy
 from typing import Optional, List
 
-import yaml
+#import yaml
 import torchvision.models as models
 import matplotlib.patches as mpatches
 
@@ -34,6 +34,13 @@ import matplotlib.patches as mpatches
 
 os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+
+
+PARAM_EPOCHS = int(sys.argv[1])
+PARAM_BATCH = int(sys.argv[2])
+PARAM_H = int(sys.argv[3])
+PARAM_W = int(sys.argv[3])
+PARAM_LOSS = sys.argv[4]
 
 
 def init_gpu():
@@ -60,6 +67,58 @@ def extract_number(file_path):
         return int(match.group(1))
     return 0
 
+
+class JointsMSELoss(nn.Module):
+    def __init__(self, use_target_weight):
+        super(JointsMSELoss, self).__init__()
+        self.criterion = nn.MSELoss(reduction='mean')
+        self.use_target_weight = use_target_weight
+
+    def forward(self, output, target, target_weight=None):
+        batch_size = output.size(0)
+        num_joints = output.size(1)
+        heatmaps_pred = output.reshape((batch_size, num_joints, -1)).split(1, 1)
+        heatmaps_gt = target.reshape((batch_size, num_joints, -1)).split(1, 1)
+        loss = 0
+
+        for idx in range(num_joints):
+            heatmap_pred = heatmaps_pred[idx].squeeze()
+            heatmap_gt = heatmaps_gt[idx].squeeze()
+            if self.use_target_weight:
+                loss += 0.5 * self.criterion(
+                    heatmap_pred.mul(target_weight[:, idx]),
+                    heatmap_gt.mul(target_weight[:, idx])
+                )
+            else:
+                loss += 0.5 * self.criterion(heatmap_pred, heatmap_gt)
+
+        return loss / num_joints
+
+class JointsHuberLoss(nn.Module): # https://www.geeksforgeeks.org/what-are-some-common-loss-functions-used-in-training-computer-vision-models/  https://pytorch.org/docs/stable/generated/torch.nn.HuberLoss.html#torch.nn.HuberLoss
+    def __init__(self, use_target_weight):
+        super(JointsHuberLoss, self).__init__()
+        self.criterion = nn.HuberLoss(reduction='mean')
+        self.use_target_weight = use_target_weight
+
+    def forward(self, output, target, target_weight=None):
+        batch_size = output.size(0)
+        num_joints = output.size(1)
+        heatmaps_pred = output.reshape((batch_size, num_joints, -1)).split(1, 1)
+        heatmaps_gt = target.reshape((batch_size, num_joints, -1)).split(1, 1)
+        loss = 0
+
+        for idx in range(num_joints):
+            heatmap_pred = heatmaps_pred[idx].squeeze()
+            heatmap_gt = heatmaps_gt[idx].squeeze()
+            if self.use_target_weight:
+                loss += 0.5 * self.criterion(
+                    heatmap_pred.mul(target_weight[:, idx]),
+                    heatmap_gt.mul(target_weight[:, idx])
+                )
+            else:
+                loss += 0.5 * self.criterion(heatmap_pred, heatmap_gt)
+
+        return loss / num_joints
 
 class KeypointsDataset(Dataset):
 
@@ -124,7 +183,10 @@ class Normalize(object):
         key_pts_copy = np.copy(key_pts)
         
         #Converto immagine a colori
-        image_copy = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        if len(image.shape) > 2:
+            image_copy = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        else:
+            image_copy = image
             
         # Normalizzo le immagini
         image_copy = (image_copy - self.mean) / self.std
@@ -603,13 +665,13 @@ def stampa_mappa(heatMap, image, t):
 
         # t parametro per sapere cosa salvare con nomi diversi
         if t == 0:
-            plt.savefig('HeatMapValPred.png')
+            plt.savefig('HeatMapValPred-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
         elif t == 1:
-            plt.savefig('HeatMapValTrue.png')
+            plt.savefig('HeatMapValTrue-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
         elif t == 2:
-            plt.savefig('HeatMapTrainTrue.png')
+            plt.savefig('HeatMapTrainTrue-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
         elif t == 3:
-            plt.savefig('HeatMapTrainPred.png')
+            plt.savefig('HeatMapTrainPred-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
         
         plt.close()
 
@@ -749,7 +811,7 @@ def stampa_metric_key(metric_key):
     plt.ylabel('Metrica')
     plt.title('Metriche per KeyPoint attraverso le Epoca')
     plt.legend()
-    plt.savefig('graficoKey.png')
+    plt.savefig('graficoKey-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
     plt.close()
 
 
@@ -772,10 +834,12 @@ def stampa_metric_key(metric_key):
 def main():
     mps_device = init_gpu()
 
-    H, W = 256, 256
-    
+    H, W = PARAM_H, PARAM_W
+    BATCH = PARAM_BATCH
+    EPOCHS = PARAM_EPOCHS
+
     #Posizione immagini
-    img_root = 'dataset_teleradiografie_14punti'
+    img_root = 'dataset_merged'
 
     #valore medio e dev standard di ImageNet
     mean = 0.485 * 255
@@ -792,7 +856,6 @@ def main():
     transformed_dataset = KeypointsDataset(root_dir=img_root, transform=data_transform)
 
 
-    BATCH=2
 
     dataset_size = len(transformed_dataset)
     print("Dataset tot: ", dataset_size)
@@ -908,10 +971,26 @@ def main():
     print("Model params:{:.3f}M".format(sum([p.numel() for p in model.parameters()])/1000**2))
 
     
-    
-    #criterion = nn.L1Loss()
-    criterion = nn.MSELoss()
+    if PARAM_LOSS == 'l1':
+        criterion = nn.L1Loss()
+    elif PARAM_LOSS == 'jointmse':
+        criterion = JointsMSELoss(
+            use_target_weight=False
+        )
+    elif PARAM_LOSS == 'huber':
+        criterion = nn.HuberLoss()
+    elif PARAM_LOSS == 'jointhuber':
+        criterion = JointsHuberLoss(
+            use_target_weight=False
+        )
+    elif PARAM_LOSS == 'mse':
+        criterion = nn.MSELoss()
+    else:
+        print('loss not set')
+        exit()
     #criterion = nn.BCELoss()
+
+
 
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
     #optimizer = torch.optim.SGD(model.parameters(), lr=0.002)
@@ -920,7 +999,7 @@ def main():
     
 
 
-    num_epochs = 50 #Numero di epoche
+    num_epochs = EPOCHS #Numero di epoche
     train_losses = []
     val_losses = []
     metric_history = []
@@ -948,14 +1027,14 @@ def main():
             
             total_train_loss = 0
            
-            for batch_index, batch in enumerate(train_dataAug):  
+            for batch_index, batch in enumerate(train_dataAug):
                 if not batch:
                     continue
                 
                 inputs = batch['image'].float().to(mps_device)
                 true_keypoints = batch['keypoints'].float().to(mps_device)
                 
-                true_heatmaps =  create_heatmaps_batch(true_keypoints, 128, 128, 14, 6)
+                true_heatmaps =  create_heatmaps_batch(true_keypoints, int(PARAM_H/2), int(PARAM_W/2), 14, 6)
                 true_heatmaps = torch.from_numpy(true_heatmaps).float().to(mps_device)
                 
                 # Azzero i gradienti dell'ottimizzatore
@@ -1080,7 +1159,7 @@ def main():
     plt.ylabel('Loss')
     plt.title('Loss During Training and Validation')
     plt.legend()
-    plt.savefig('graficoTrain.png')
+    plt.savefig('graficoTrain-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
     plt.close()
 
     # Tracciamento mre
@@ -1090,7 +1169,7 @@ def main():
     plt.ylabel('Percentage')
     plt.title('Metric Mean Relative Error')
     plt.legend()
-    plt.savefig('graficoMse.png')
+    plt.savefig('graficoMse-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
     plt.close()
 
     # Tracciamento sdr
@@ -1100,7 +1179,7 @@ def main():
     plt.ylabel('Percentage')
     plt.title('Metric Successful Detection Rate')
     plt.legend()
-    plt.savefig('graficoSdr.png')
+    plt.savefig('graficoSdr-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
     plt.close()
 
     if early_stop:
@@ -1110,7 +1189,7 @@ def main():
 
     if best_model_state:
         model.load_state_dict(best_model_state)
-    torch.save(model.state_dict(), 'best_saved_model_TransKeyR.pth')
+    torch.save(model.state_dict(), 'best_saved_model_TransKeyR-epoch{}-batch{}-size{}-loss{}.pth'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
 
 
 
@@ -1151,4 +1230,6 @@ def main():
 
 
 if __name__ == "__main__":
+
+    print('Test-epoch{}-batch{}-size{}-loss{}'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
     main()
