@@ -1075,7 +1075,7 @@ def main():
                     inputs = batch['image'].float().to(mps_device)
                     true_keypointsV = batch['keypoints'].float().to(mps_device)
 
-                    true_heatmapsV = create_heatmaps_batch(true_keypointsV, 128, 128, 14, 6)
+                    true_heatmapsV = create_heatmaps_batch(true_keypointsV, int(PARAM_H/2), int(PARAM_W/2), 14, 6)
                     true_heatmapsV = torch.from_numpy(true_heatmapsV).float().to(mps_device)
 
                     
@@ -1093,7 +1093,10 @@ def main():
                     distanze_batch = torch.norm(outputs - true_keypointsV, dim=-1)
 
                     # Soglia utilizzata per il calcolo della SDR -- 2 pixel
-                    soglia = 2  
+                    if PARAM_H <= 128:
+                        soglia = 2
+                    else:
+                        soglia = int(PARAM_H / 128)
                     punteggi_batch = (distanze_batch <= soglia).float()
                     
                     # Array di distanza per ogni batch
