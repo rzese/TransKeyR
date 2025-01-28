@@ -43,6 +43,8 @@ PARAM_W = int(sys.argv[3])
 PARAM_LOSS = sys.argv[4]
 
 
+stat = {'png': 0, 'jpg': 0, 'grayscale': 0}
+
 def init_gpu():
     if torch.backends.mps.is_available():
         mps_device = torch.device("mps")
@@ -130,29 +132,34 @@ class KeypointsDataset(Dataset):
         # Costruisco la lista dei campioni validi
         file_list = os.listdir(self.root_dir)
         for filename in file_list:
-            if (filename.endswith(".jpg") or filename.endswith(".JPG") or filename.endswith(".jpeg")) and ("-1" not in filename and " 2" not in filename):
+            if (filename.endswith(".jpg") or filename.endswith(".JPG") or filename.endswith(".jpeg") or filename.endswith(".PNG") or filename.endswith(".png")) and ("-1" not in filename and " 2" not in filename):
                 idx = filename.split('.')[0]
                 txt_name = f"{idx}.txt"
                 if not os.path.exists(os.path.join(self.root_dir, txt_name)):
                     txt_name = f"{idx} .txt"
                 txt_path = os.path.join(self.root_dir, txt_name)
                 img_path = os.path.join(self.root_dir, filename)
-                
+
+                if (filename.endswith(".jpg") or filename.endswith(".JPG") or filename.endswith(".jpeg")):
+                    stat['jpg'] += 1
+                else:
+                    stat['png'] += 1
+
                 # Controllo per escludere immagini che hanno più di 14 punti di interesse 
                 # o meno di 14 punti all'interno del file delle coordinate .txt
                 if os.path.exists(txt_path):
                     data = pd.read_csv(txt_path, delimiter='\t' or ',')
                     if len(data.index) == 14:
                         self.samples.append((img_path, txt_path))
-        
-                        
+
+
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
         img_path, txt_path = self.samples[idx]
         image = mpimg.imread(img_path)
-        
+
         try:
             data = pd.read_csv(txt_path, delimiter='\t')
             coordinates = data[['X', 'Y']].values
@@ -165,7 +172,7 @@ class KeypointsDataset(Dataset):
         if self.transform:
             sample = self.transform(sample)
         return sample
-    
+
 
 
 class Normalize(object):
@@ -175,28 +182,29 @@ class Normalize(object):
         self.std = std
         self.H = H
         self.W = W
-    
+
     def __call__(self, sample):
         image, key_pts = sample['image'], sample['keypoints']
-            
+
         image_copy = np.copy(image)
         key_pts_copy = np.copy(key_pts)
-        
+
         #Converto immagine a colori
         if len(image.shape) > 2:
             image_copy = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         else:
             image_copy = image
-            
+            stat['grayscale'] += 1
+
         # Normalizzo le immagini
         image_copy = (image_copy - self.mean) / self.std
-            
+
         # Normalizzo le coordinate in base alle dimensioni desiderate
-        key_pts_copy[:,0] = key_pts_copy[:,0]/self.W 
-        key_pts_copy[:,1] = key_pts_copy[:,1]/self.H 
-        
+        key_pts_copy[:,0] = key_pts_copy[:,0]/self.W
+        key_pts_copy[:,1] = key_pts_copy[:,1]/self.H
+
         return {'image': image_copy, 'keypoints': key_pts_copy}
-    
+
 
 class Rescale(object):
     """ Ridimensiona le immagini e i relativi punti"""
@@ -207,7 +215,7 @@ class Rescale(object):
     def __call__(self, sample):
         image, key_pts = sample['image'], sample['keypoints']
         h, w = image.shape[:2]
-    
+
         img = cv2.resize(image, (self.W, self.H))
         key_pts = key_pts * [self.W/ w, self.H / h]
 
@@ -220,12 +228,12 @@ class ToTensor(object):
         if not sample:
             return {}
         image, key_pts = sample['image'], sample['keypoints']
-         
-        
+
+
         if(len(image.shape) == 2):
             # aggiungo una terza dimensione per lavorare con le CNN
             image = image.reshape(image.shape[0], image.shape[1], 1)
-        
+
         #Converto in (C, H, W)
         image = image.transpose((2, 0, 1))
 
@@ -234,7 +242,7 @@ class ToTensor(object):
             key_pts = np.array(key_pts)
         return {'image': torch.from_numpy(image),
                 'keypoints': torch.from_numpy(key_pts)}
-    
+
 
 class RandomRotation(object):
     def __call__(self, sample):
@@ -244,10 +252,10 @@ class RandomRotation(object):
 
         if rand <= 0.25:
             flipped_image = np.fliplr(image)
-            key_pts[:, 0] = image.shape[1] - key_pts[:, 0]  
+            key_pts[:, 0] = image.shape[1] - key_pts[:, 0]
 
             return {'image': flipped_image, 'keypoints': key_pts}
-        
+
         elif rand <= 0.5:
             angle =  90
         elif rand <= 0.75:
@@ -268,7 +276,7 @@ class RandomRotation(object):
         transformed_points = M.dot(points_ones.T).T
 
         return {'image': rotated_image, 'keypoints': transformed_points}
-        
+
 
 class RandomFilterOrContrast(object):
     def __init__(self, kernel, alpha, beta, probability):
@@ -293,7 +301,7 @@ class RandomFilterOrContrast(object):
             filtered_image = np.clip(image.astype(np.int16) - self.beta, 0, 255).astype(np.uint8)
 
         return {'image': filtered_image, 'keypoints': key_pts}
-    
+
 
 
 def denormalize_keypoints(keypoints_normalized, width, height):
@@ -309,7 +317,7 @@ def denormalize_keypoints(keypoints_normalized, width, height):
     keypoints_original = torch.stack([keypoints_original_x, keypoints_original_y], dim=-1)
     return keypoints_original
 
-    
+
 
 ################################### M O D E L L O ##################################################
 
@@ -360,12 +368,12 @@ class TransKeyR(nn.Module):
         self.inplanes = 64
         self.deconv_with_bias = False
 
-        d_model = 512 
+        d_model = 512
         dim_feedforward = 1024
         encoder_layers_num = 4
         n_head = 8
         pos_embedding_type = 'sine'
-        w, h = [W, H] 
+        w, h = [W, H]
 
         super(TransKeyR, self).__init__()
         self.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
@@ -375,7 +383,7 @@ class TransKeyR(nn.Module):
 
         self.layer1 = self._make_layer(block, 64, layers[0], BN_MOMENTUM)
         self.layer2 = self._make_layer(block, 128, layers[1], BN_MOMENTUM, stride=2)
-        
+
         self.reduce = nn.Conv2d(self.inplanes, d_model, 1, bias=False)
 
         self._make_position_embedding(w, h, d_model, pos_embedding_type)
@@ -404,8 +412,8 @@ class TransKeyR(nn.Module):
 
         self.final_layer = nn.Conv2d(
             in_channels=d_model,
-            out_channels= 14, 
-            kernel_size= 1, 
+            out_channels= 14,
+            kernel_size= 1,
             stride=1,
             padding=0
         )
@@ -426,7 +434,7 @@ class TransKeyR(nn.Module):
                 self.pos_embedding = nn.Parameter(
                     self._make_sine_position_embedding2(d_model),
                     requires_grad=False)
-                
+
 
 
 
@@ -452,7 +460,7 @@ class TransKeyR(nn.Module):
         pos_embedding = pos_w + pos_h
 
         return pos_embedding
-      
+
 
 
     def _make_layer(self, block, planes, blocks, BN_MOMENTUM, stride=1):
@@ -515,7 +523,7 @@ class TransKeyR(nn.Module):
             self.inplanes = planes
 
         return nn.Sequential(*layers)
-    
+
 
 
     def find_keypoints(self, heatmaps):
@@ -526,9 +534,9 @@ class TransKeyR(nn.Module):
 
             # Trova le coordinate (indice) del valore massimo (quindi più caldo) lungo l'asse dell'ultimo canale
             keypoints_flat = torch.argmax(heatmaps_reshaped, dim=-1)
-            
+
             # Numero di punti di attivazione alti da trovare
-            K = 8  
+            K = 8
             heatmaps_cpu = heatmaps.detach().cpu().numpy()
 
             # Trovo gli indici dei K valori più alti (usati per verifica stampa)
@@ -540,18 +548,18 @@ class TransKeyR(nn.Module):
             keypoints_x = keypoints_flat % width
 
             # Normalizzo le coordinate in [0, 1]
-            keypoints_x = keypoints_x.float() / (width - 1) 
+            keypoints_x = keypoints_x.float() / (width - 1)
             keypoints_y = keypoints_y.float() / (width - 1)
 
             # Restituisco le coordinate dei punti chiave
             keypoints = torch.stack([keypoints_x, keypoints_y], dim=-1)
-            
+
 
             return keypoints, valori_attivazione
-    
-    
+
+
     def forward(self, x):
-        
+
         # Passaggio attraverso il primo strato convoluzionale
         x = self.conv1(x)
         x = self.bn1(x)
@@ -561,9 +569,9 @@ class TransKeyR(nn.Module):
 
         # Passaggio attraverso i blocchi ResNet50
         x = self.layer1(x)
-        x = F.dropout(x, p=0.5, training=self.training)  
+        x = F.dropout(x, p=0.5, training=self.training)
         x = self.layer2(x)
-        x = F.dropout(x, p=0.5, training=self.training) 
+        x = F.dropout(x, p=0.5, training=self.training)
 
         # Riduzione del nuemro dei canali a d_model
         x = self.reduce(x)
@@ -579,7 +587,7 @@ class TransKeyR(nn.Module):
 
         # Passaggio dall'encoder del Trasformer
         x = self.global_encoder(x)
-        x = F.dropout(x, p=0.5, training=self.training)  
+        x = F.dropout(x, p=0.5, training=self.training)
 
         # Reshape e passaggio al layer di deconvoluzione
         x = x.permute(1, 2, 0).contiguous().view(bs, c, h, w)
@@ -598,7 +606,7 @@ class TransKeyR(nn.Module):
 
 #################################### F I N E - M O D E L L O ###############################################
 
-    
+
 
 def gaussian(x, y, H, W, sigma=5, device='cpu'):
     xs = torch.arange(0, W, step=1, dtype=torch.float32).to(device)
@@ -616,33 +624,33 @@ def generate_heatmaps_batch(batch, H, W):
     """
     Genera mappe di calore per un batch di keypoints.
     """
-    images = batch['image']  
-    keypoints = batch['keypoints'].float() 
+    images = batch['image']
+    keypoints = batch['keypoints'].float()
     keypoints = denormalize_keypoints(keypoints, W, H)
     batch_size = keypoints.shape[0]
-    num_keypoints = keypoints.shape[1] 
+    num_keypoints = keypoints.shape[1]
     heatmaps_batch = torch.zeros((batch_size, num_keypoints, H, W), dtype=torch.float32)
-    
+
     for b in range(batch_size):
         for i in range(0, num_keypoints):
             x = keypoints[b, i , 0].item()
             y = keypoints[b, i, 1].item()
             heatmaps_batch[b, i] = gaussian(x, y, H, W)
-    
+
     return images, heatmaps_batch
 
 
 def stampa_mappa(heatMap, image, t):
 
         hm = heatMap.cpu().detach().numpy()
-        image = image.cpu().detach().numpy().squeeze()
-                
+        image = image.cpu().detach().numpy()[0]
+
         nrows = 4  # Numero di righe di sottotrame
         ncols = 4  # Numero di colonne di sottotrame
-                
+
         img_index = 0  # Indice dell'immagine che visualizzo da esempio
 
-                
+
         fig, axs = plt.subplots(nrows, ncols, figsize=(15, 15))
         target_size = image[img_index].shape[:2]  # Dimensione dell'immagine
         #print("target_size:   ", target_size)
@@ -651,28 +659,28 @@ def stampa_mappa(heatMap, image, t):
         for idx, ax in enumerate(axs.flat):
                 # Controllo per evitare indici fuori range
                     if idx < hm.shape[1]:
-                        
+
                         heatmap = hm[img_index, idx]
                         heatmap_resized = cv2.resize(heatmap, (target_size), interpolation=cv2.INTER_LINEAR)
 
-                        ax.imshow(image[img_index], cmap='gray')  
-                       
+                        ax.imshow(image[img_index], cmap='gray')
+
                         ax.imshow(heatmap_resized, cmap='viridis', interpolation='bilinear', alpha=0.7)
                         ax.set_title(f'Keypoint {idx+1}')
-                        ax.axis('off')  
+                        ax.axis('off')
 
         plt.tight_layout()
 
         # t parametro per sapere cosa salvare con nomi diversi
         if t == 0:
-            plt.savefig('HeatMapValPred-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
+            plt.savefig('epoch{}-batch{}-size{}-loss{}'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS) + '/HeatMapValPred-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
         elif t == 1:
-            plt.savefig('HeatMapValTrue-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
+            plt.savefig('epoch{}-batch{}-size{}-loss{}'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS) + '/HeatMapValTrue-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
         elif t == 2:
-            plt.savefig('HeatMapTrainTrue-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
+            plt.savefig('epoch{}-batch{}-size{}-loss{}'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS) + '/HeatMapTrainTrue-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
         elif t == 3:
-            plt.savefig('HeatMapTrainPred-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
-        
+            plt.savefig('epoch{}-batch{}-size{}-loss{}'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS) + '/HeatMapTrainPred-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
+
         plt.close()
 
 
@@ -682,9 +690,9 @@ def draw_gaussian(heatmap, center, radius):
     gaussian = np.outer(gaussian, gaussian)
 
     gaussian /= gaussian.max()
-    
+
     x, y = center
-    x, y = int(x.item()), int(y.item())  
+    x, y = int(x.item()), int(y.item())
 
     height, width = heatmap.shape[0:2]
 
@@ -732,7 +740,7 @@ def create_heatmaps(true_keypoints,height, width, num_keypoints, radius):
         # Estraggo le coordinate x e y del keypoint corrente
         x = true_keypoints[i, 0]
         y = true_keypoints[i, 1]
-        
+
         # Disegno la mappa di calore centrata sul singolo punto di un raggio pari a "radius"
         draw_gaussian(heatmaps[i], (x, y), radius)
 
@@ -743,23 +751,23 @@ def create_heatmaps(true_keypoints,height, width, num_keypoints, radius):
 def calcola_mre(keypoints_predetti, keypoints_verita):
     # Calcola la distanza euclidea tra i keypoints predetti e quelli veri
     distanze = torch.norm(keypoints_predetti - keypoints_verita, dim=2)
-    
+
     # Calcola l'MRE come la media delle distanze
     mre = distanze.mean().item()
-    
+
     return mre
 
 
 def calcola_sdr(keypoints_predetti, keypoints_verita, soglia):
     # Calcola la distanza euclidea tra i keypoints predetti e quelli veri
     distanze = torch.norm(keypoints_predetti - keypoints_verita, dim=2)
-    
+
     # Conta i keypoints per cui la distanza è inferiore alla soglia
     keypoints_corretti = (distanze < soglia).float()
-    
+
     # Calcola l'SDR come la percentuale di keypoints corretti
     sdr = keypoints_corretti.mean().item() * 100  # Converti in percentuale
-    
+
     return sdr
 
 def compute_range(num_epoc, init, fin=1):
@@ -775,8 +783,8 @@ def compute_range(num_epoc, init, fin=1):
 
 
 def plot_keypoints_pred(ax,image, true_keypoints, predicted_keypoints, H, W):
-    
-    if image.dim() == 3 and image.shape[0] == 1:  
+
+    if image.dim() == 3 and image.shape[0] == 1:
         image = image.squeeze(0)
 
     # Sposta il tensore sulla CPU 
@@ -811,7 +819,7 @@ def stampa_metric_key(metric_key):
     plt.ylabel('Metrica')
     plt.title('Metriche per KeyPoint attraverso le Epoca')
     plt.legend()
-    plt.savefig('graficoKey-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
+    plt.savefig('epoch{}-batch{}-size{}-loss{}'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS) + '/graficoKey-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
     plt.close()
 
 
@@ -821,6 +829,77 @@ def stampa_metric_key(metric_key):
 
 
 
+
+# ==================================================
+
+def get_there_model(model_path, BN_MOMENTUM, W, H):
+    if os.path.isfile(model_path):
+
+        resnet_spec = {
+            50: (Bottleneck, [3, 4, 6, 3]),
+            101: (Bottleneck, [3, 4, 23, 3]),
+            152: (Bottleneck, [3, 8, 36, 3])}
+
+        block_class, layers = resnet_spec[50]
+
+        # Carico il modello TransKeyR
+        model = TransKeyR(block_class, layers, BN_MOMENTUM, W, H)
+
+        # Carico i pesi del modello
+        state_dict = torch.load(model_path, map_location=torch.device('cpu')) # TODO GPU?
+        model.load_state_dict(state_dict)
+        model.eval()
+
+
+    else:
+        resnet_spec = { 50: (Bottleneck, [3, 4, 6, 3]),
+                        101: (Bottleneck, [3, 4, 23, 3]),
+                        152: (Bottleneck, [3, 8, 36, 3])}
+
+        block_class, layers = resnet_spec[50]
+
+
+        # Carico il modello TransKeyR
+        model = TransKeyR(block_class, layers, BN_MOMENTUM, W, H)
+
+        # Salva i pesi originali del modello
+        original_state_dict = copy.deepcopy(model.state_dict())
+        #pretrained_model= model.init_weights('ResNet50-Download.pth')
+
+        # Crea un'istanza del modello ResNet50 senza pesi preaddestrati
+        pretrained_model = models.resnet50()
+
+        # carico da file i pesi pre addestrati su IMAGENET1K_V1
+        # (Su cluster Coka non posso utilizzare il comando "weights=ResNet50_Weights.IMAGENET1K_V1")
+        path_to_pth_file = 'resnet50.pth'
+        #pretrained_model = models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
+        pretrained_model.load_state_dict(torch.load(path_to_pth_file))
+
+        # Modifico il primo strato convoluzionale per accettare 1 canale invece di 3
+        # e calcola la media dei pesi attraverso i canali RGB
+        conv1_weights = pretrained_model.conv1.weight.data
+        mean_conv1_weights = conv1_weights.mean(dim=1, keepdim=True)
+
+        # Applica la media calcolata al primo strato convoluzionale del modello pre-addestrato
+        pretrained_model.conv1 = torch.nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        pretrained_model.conv1.weight.data = mean_conv1_weights
+
+        # Sostituisco i pesi nel modello caricato
+        model.load_state_dict(pretrained_model.state_dict(), strict=False)
+
+        loaded_state_dict = model.state_dict()
+
+        # Confronto i pesi prima e dopo il caricamento per capire che i pesi sono stati effettivamente caricati
+        for key in original_state_dict:
+            if key in loaded_state_dict:
+                if not torch.equal(original_state_dict[key], loaded_state_dict[key]):
+                    print(f"Weights changed for layer: {key}")
+            else:
+                print(f"Layer {key} was not found in the loaded model.")
+        for name, param in model.named_parameters():
+            print(f"Layer: {name} | Trainable: {param.requires_grad}")
+
+    return model
 
 
 
@@ -837,6 +916,7 @@ def main():
     H, W = PARAM_H, PARAM_W
     BATCH = PARAM_BATCH
     EPOCHS = PARAM_EPOCHS
+    BN_MOMENTUM = 0.1
 
     #Posizione immagini
     img_root = 'dataset_merged'
@@ -847,13 +927,14 @@ def main():
 
     data_transform =transforms.Compose(
     [
-        Rescale(H, W), 
+        Rescale(H, W),
         Normalize(mean, std, H, W),
         ToTensor()
     ])
 
     #Creazione Dataset 
     transformed_dataset = KeypointsDataset(root_dir=img_root, transform=data_transform)
+    print(stat)
 
 
 
@@ -867,7 +948,6 @@ def main():
     print("Test size: ", test_size)
 
     train_dataset, val_dataset, test_dataset = random_split(transformed_dataset, [train_size, val_size, test_size])
-    print((train_dataset))
 
 
     # Creo un DataLoader per esplorare i dati
@@ -884,7 +964,7 @@ def main():
     transform3 =transforms.Compose(
     [
         Rescale(H, W),
-        RandomRotation(), 
+        RandomRotation(),
         RandomFilterOrContrast(custom_kernel, 1, 1.3, probability=0.5),
         Normalize(mean, std, H, W),
         ToTensor()
@@ -914,63 +994,14 @@ def main():
     train_dataAug = DataLoader(combined_dataset, batch_size=BATCH, shuffle=True)
 
 
-
-
-    BN_MOMENTUM = 0.1
-    
-    resnet_spec = { 50: (Bottleneck, [3, 4, 6, 3]),
-                    101: (Bottleneck, [3, 4, 23, 3]),
-                    152: (Bottleneck, [3, 8, 36, 3])}
-
-    block_class, layers = resnet_spec[50]
-
-
-    # Carico il modello TransKeyR
-    model = TransKeyR(block_class, layers, BN_MOMENTUM, W, H)
-
-    # Salva i pesi originali del modello
-    original_state_dict = copy.deepcopy(model.state_dict())
-    #pretrained_model= model.init_weights('ResNet50-Download.pth')
-
-    # Crea un'istanza del modello ResNet50 senza pesi preaddestrati
-    pretrained_model = models.resnet50()
-
-    # carico da file i pesi pre addestrati su IMAGENET1K_V1
-    # (Su cluster Coka non posso utilizzare il comando "weights=ResNet50_Weights.IMAGENET1K_V1")
-    path_to_pth_file = 'resnet50.pth'
-    #pretrained_model = models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
-    pretrained_model.load_state_dict(torch.load(path_to_pth_file))
-
-    # Modifico il primo strato convoluzionale per accettare 1 canale invece di 3
-    # e calcola la media dei pesi attraverso i canali RGB
-    conv1_weights = pretrained_model.conv1.weight.data
-    mean_conv1_weights = conv1_weights.mean(dim=1, keepdim=True)
-
-    # Applica la media calcolata al primo strato convoluzionale del modello pre-addestrato
-    pretrained_model.conv1 = torch.nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
-    pretrained_model.conv1.weight.data = mean_conv1_weights
-    
-    # Sostituisco i pesi nel modello caricato
-    model.load_state_dict(pretrained_model.state_dict(), strict=False)
-
-    loaded_state_dict = model.state_dict()
-
-    # Confronto i pesi prima e dopo il caricamento per capire che i pesi sono stati effettivamente caricati
-    for key in original_state_dict:
-        if key in loaded_state_dict:
-            if not torch.equal(original_state_dict[key], loaded_state_dict[key]):
-                print(f"Weights changed for layer: {key}")
-        else:
-            print(f"Layer {key} was not found in the loaded model.")
-    for name, param in model.named_parameters():
-        print(f"Layer: {name} | Trainable: {param.requires_grad}")
+    model = get_there_model('epoch{}-batch{}-size{}-loss{}'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS) + '/best_saved_model_TransKeyR-epoch{}-batch{}-size{}-loss{}.pth'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS), BN_MOMENTUM, W, H)
 
 
     # Assegno il modello al device
-    model.to(mps_device)  
+    model.to(mps_device)
     print("Model params:{:.3f}M".format(sum([p.numel() for p in model.parameters()])/1000**2))
 
-    
+
     if PARAM_LOSS == 'l1':
         criterion = nn.L1Loss()
     elif PARAM_LOSS == 'jointmse':
@@ -996,7 +1027,7 @@ def main():
     #optimizer = torch.optim.SGD(model.parameters(), lr=0.002)
     #optimizer = torch.optim.RMSprop(model.parameters(), lr=0.01)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2)
-    
+
 
 
     num_epochs = EPOCHS #Numero di epoche
@@ -1007,63 +1038,63 @@ def main():
     metric_sdr = []
     metric_key = []
 
-    
+
 
     # Parametri per l'early stopping
-    patience = 8 
-    best_val_loss = float("inf")  
+    patience = 8
+    best_val_loss = float("inf")
     epochs_no_improve = 0  # Contatore delle epoche senza miglioramento
     early_stop = False  # Flag per interrompere l'addestramento
     best_model_state = None
 
-    
+
     model = model.to(mps_device)
 
     for epoch in range(num_epochs):
             distanze_totali = []
-            
+
             # Modello in modalità di addestramento
-            model.train()  
-            
+            model.train()
+
             total_train_loss = 0
-           
+
             for batch_index, batch in enumerate(train_dataAug):
                 if not batch:
                     continue
-                
+
                 inputs = batch['image'].float().to(mps_device)
                 true_keypoints = batch['keypoints'].float().to(mps_device)
-                
+
                 true_heatmaps =  create_heatmaps_batch(true_keypoints, int(PARAM_H/2), int(PARAM_W/2), 14, 6)
                 true_heatmaps = torch.from_numpy(true_heatmaps).float().to(mps_device)
-                
+
                 # Azzero i gradienti dell'ottimizzatore
                 optimizer.zero_grad()
-                
+
                 outputs, hm, _ = model(inputs)
                 hm = hm.float().to(mps_device)
                 #print(hm.shape)
-                
+
                 loss = (criterion(hm, true_heatmaps))*100
                 total_train_loss += loss.item()
 
                 sys.stdout.write(f'\rEpoch {epoch+1}/{num_epochs} - Batch {batch_index + 1}/{len(train_dataAug)} - Loss: {loss.item()}')
                 sys.stdout.flush()
-            
+
 
                 #Backward pass e ottimizzazione
                 loss.backward()
                 optimizer.step()
 
-          
+
             train_loss_avg = total_train_loss / len(train_dataAug)
             train_losses.append(train_loss_avg)
-            
+
 
             with torch.no_grad():
 
                 # Disabilita il calcolo dei gradienti
-                model.eval()  
+                model.eval()
 
                 val_loss = 0
                 val_pck = 0
@@ -1078,18 +1109,18 @@ def main():
                     true_heatmapsV = create_heatmaps_batch(true_keypointsV, int(PARAM_H/2), int(PARAM_W/2), 14, 6)
                     true_heatmapsV = torch.from_numpy(true_heatmapsV).float().to(mps_device)
 
-                    
+
                     outputs, hm, _ = model(inputs)
-                    
+
                     outputs = (outputs).float().to(mps_device)
-                    
+
                     loss = (criterion(outputs, true_keypointsV)*100)
 
                     val_loss += loss.item()
 
                     true_keypointsV = denormalize_keypoints(true_keypointsV, W, H)
                     outputs = denormalize_keypoints(outputs, W, H)
-                   
+
                     distanze_batch = torch.norm(outputs - true_keypointsV, dim=-1)
 
                     # Soglia utilizzata per il calcolo della SDR -- 2 pixel
@@ -1098,29 +1129,29 @@ def main():
                     else:
                         soglia = int(PARAM_H / 128)
                     punteggi_batch = (distanze_batch <= soglia).float()
-                    
+
                     # Array di distanza per ogni batch
                     distanze_totali.append(punteggi_batch)
 
 
                     val_mre += calcola_mre(outputs,true_keypointsV)
-                    
+
                     val_sdr += calcola_sdr(outputs,true_keypointsV,soglia)
- 
-    
+
+
             # Concatena le distanze di tutti i batch
             distanze_totali = torch.cat(distanze_totali, dim=0)
 
             # Calcola la metrica media per ciascun keypoint su tutti i dati
             metriche_per_keypoint = distanze_totali.mean(dim=0).cpu().numpy() *100
-            
+
             # Stampa la metrica media per ciascun keypoint
             print(f"\nPrecisione per ogni keypoint con soglia pari a {soglia} pixel: ")
             for i, metrica in enumerate(metriche_per_keypoint, 1):
                 print(f"KeyPoint {i}: {metrica:.2f} %")
 
             metric_key.append(metriche_per_keypoint)
-        
+
             # Calcola la loss media di validazione
             val_loss_avg = val_loss / len(val_loader)
             print(f"\n***** Loss media sulla validazione: {val_loss_avg:.5f} *****")
@@ -1162,7 +1193,7 @@ def main():
     plt.ylabel('Loss')
     plt.title('Loss During Training and Validation')
     plt.legend()
-    plt.savefig('graficoTrain-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
+    plt.savefig('epoch{}-batch{}-size{}-loss{}'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS) + '/graficoTrain-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
     plt.close()
 
     # Tracciamento mre
@@ -1172,7 +1203,7 @@ def main():
     plt.ylabel('Percentage')
     plt.title('Metric Mean Relative Error')
     plt.legend()
-    plt.savefig('graficoMse-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
+    plt.savefig('epoch{}-batch{}-size{}-loss{}'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS) + '/graficoMse-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
     plt.close()
 
     # Tracciamento sdr
@@ -1182,7 +1213,7 @@ def main():
     plt.ylabel('Percentage')
     plt.title('Metric Successful Detection Rate')
     plt.legend()
-    plt.savefig('graficoSdr-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
+    plt.savefig('epoch{}-batch{}-size{}-loss{}'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS) + '/graficoSdr-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
     plt.close()
 
     if early_stop:
@@ -1192,21 +1223,21 @@ def main():
 
     if best_model_state:
         model.load_state_dict(best_model_state)
-    torch.save(model.state_dict(), 'best_saved_model_TransKeyR-epoch{}-batch{}-size{}-loss{}.pth'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
+    torch.save(model.state_dict(), 'epoch{}-batch{}-size{}-loss{}'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS) + '/best_saved_model_TransKeyR-epoch{}-batch{}-size{}-loss{}.pth'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
 
 
 
     counter = 0
-    plt.figure(figsize=(15, 15)) 
+    plt.figure(figsize=(15, 15))
     num_images = 36
 
     model.load_state_dict((best_model_state))
     model.eval()
-  
+
     for batch in test_loader:
-            if counter >= num_images: 
+            if counter >= num_images:
                 break
-    
+
             images, _ = generate_heatmaps_batch(batch, H, W)
 
             img_index = 0  # Indice dell'immagine nel batch
@@ -1217,7 +1248,7 @@ def main():
             for img_index in range(len(images)):
                 ax = plt.subplot(6, 6, counter + 1)  # Creo un subplot per ogni immagine
                 plot_keypoints_pred(ax, images[img_index], batch['keypoints'][img_index], outputs[img_index], H, W)
-              
+
                 counter += 1
                 if counter >= num_images:
                     break
@@ -1228,11 +1259,17 @@ def main():
     # Legenda
     plt.legend(handles=[red_patch, blue_patch], loc='upper center', bbox_to_anchor=(-2.5, -0.15), fancybox=True, shadow=True, ncol=2)
 
-    plt.savefig('TestPrediction.png')
+    plt.savefig('epoch{}-batch{}-size{}-loss{}'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS) + '/TestPrediction-epoch{}-batch{}-size{}-loss{}.png'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
     plt.close()
 
 
 if __name__ == "__main__":
 
+    newpath = 'epoch{}-batch{}-size{}-loss{}'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS)
+    if not os.path.exists(newpath):
+        os.makedirs(newpath)
+
     print('Test-epoch{}-batch{}-size{}-loss{}'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
     main()
+
+
