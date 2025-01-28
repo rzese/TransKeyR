@@ -364,7 +364,6 @@ class Bottleneck(nn.Module):
 
 class TransKeyR(nn.Module):
     def __init__(self, block, layers, BN_MOMENTUM, W, H):
-        super(TransKeyR, self).__init__()
         self.inplanes = 64
         self.deconv_with_bias = False
 
@@ -398,7 +397,7 @@ class TransKeyR(nn.Module):
 
         self.global_encoder = TransformerEncoder(
             encoder_layer,
-            encoder_layers_num,
+            encoder_layers_num
         )
 
         self.inplanes = d_model
@@ -432,13 +431,13 @@ class TransKeyR(nn.Module):
                 self.pos_embedding = nn.Parameter(torch.randn(length, d_model))
             else:
                 self.pos_embedding = nn.Parameter(
-                    self._make_sine_position_embedding2(d_model),
+                    self._make_sine_position_embedding(d_model),
                     requires_grad=False)
 
 
 
 
-    def _make_sine_position_embedding2(self, d_model, temperature=10000):
+    def _make_sine_position_embedding(self, d_model, temperature=10000):
         h, w = self.pe_h, self.pe_w
         grid_h, grid_w = torch.meshgrid(
             torch.linspace(0, h-1, h), torch.linspace(0, w-1, w), indexing='ij'
@@ -846,10 +845,10 @@ def get_there_model(model_path, BN_MOMENTUM, W, H):
         model = TransKeyR(block_class, layers, BN_MOMENTUM, W, H)
 
         # Carico i pesi del modello
-        state_dict = torch.load(model_path, map_location=torch.device('cpu')) # TODO GPU?
+        state_dict = torch.load(model_path) # TODO GPU?
         model.load_state_dict(state_dict)
         model.eval()
-
+        print("Loaded model from {}".format(model_path))
 
     else:
         resnet_spec = { 50: (Bottleneck, [3, 4, 6, 3]),
@@ -1035,7 +1034,9 @@ def main():
     val_losses = []
     metric_history = []
     metric_mre = []
-    metric_sdr = []
+    metric_sdr_at05 = []
+    metric_sdr_at1 = []
+    metric_sdr_at5 = []
     metric_key = []
 
 
@@ -1099,7 +1100,9 @@ def main():
                 val_loss = 0
                 val_pck = 0
                 val_mre = 0
-                val_sdr = 0
+                val_sdr_at05 = 0
+                val_sdr_at1 = 0
+                val_sdr_at5 = 0
 
                 for batch in val_loader:  # Itera sul DataLoader di validazione
 
@@ -1124,11 +1127,10 @@ def main():
                     distanze_batch = torch.norm(outputs - true_keypointsV, dim=-1)
 
                     # Soglia utilizzata per il calcolo della SDR -- 2 pixel
-                    if PARAM_H <= 128:
-                        soglia = 2
-                    else:
-                        soglia = int(PARAM_H / 128)
-                    punteggi_batch = (distanze_batch <= soglia).float()
+                    soglia_at05 = int(round(PARAM_H * 0.005))
+                    soglia_at1 = int(round(PARAM_H * 0.01))
+                    soglia_at5 = int(round(PARAM_H * 0.05))
+                    punteggi_batch = (distanze_batch <= soglia_at1).float()
 
                     # Array di distanza per ogni batch
                     distanze_totali.append(punteggi_batch)
@@ -1136,7 +1138,9 @@ def main():
 
                     val_mre += calcola_mre(outputs,true_keypointsV)
 
-                    val_sdr += calcola_sdr(outputs,true_keypointsV,soglia)
+                    val_sdr_at05 += calcola_sdr(outputs,true_keypointsV,soglia_at05)
+                    val_sdr_at1 += calcola_sdr(outputs,true_keypointsV,soglia_at1)
+                    val_sdr_at5 += calcola_sdr(outputs,true_keypointsV,soglia_at5)
 
 
             # Concatena le distanze di tutti i batch
@@ -1146,7 +1150,7 @@ def main():
             metriche_per_keypoint = distanze_totali.mean(dim=0).cpu().numpy() *100
 
             # Stampa la metrica media per ciascun keypoint
-            print(f"\nPrecisione per ogni keypoint con soglia pari a {soglia} pixel: ")
+            print(f"\nPrecisione per ogni keypoint con soglia pari a {soglia_at1} pixel (@1.0%): ")
             for i, metrica in enumerate(metriche_per_keypoint, 1):
                 print(f"KeyPoint {i}: {metrica:.2f} %")
 
@@ -1161,18 +1165,25 @@ def main():
             val_med_mre = val_mre / len(val_loader)
             print(f'***** Metrica MRE: {val_med_mre:.5f} *****\n\n')
 
-            val_med_sdr = val_sdr / len(val_loader)
-            print(f'***** Metrica SDR: {val_med_sdr:.5f} *****\n\n')
+            val_med_sdr_at05 = val_sdr_at05 / len(val_loader)
+            val_med_sdr_at1 = val_sdr_at1 / len(val_loader)
+            val_med_sdr_at5 = val_sdr_at5 / len(val_loader)
+            print(f'***** Metrica SDR@0.5%: {val_med_sdr_at05:.5f} *****')
+            print(f'***** Metrica SDR@1.0%: {val_med_sdr_at1:.5f} *****')
+            print(f'***** Metrica SDR@5.0%: {val_med_sdr_at5:.5f} *****\n\n')
 
             val_losses.append(val_loss_avg)
             metric_mre.append(val_med_mre)
-            metric_sdr.append(val_med_sdr)
+            metric_sdr_at05.append(val_med_sdr_at05)
+            metric_sdr_at1.append(val_med_sdr_at1)
+            metric_sdr_at5.append(val_med_sdr_at5)
 
             # Controllo per early stopping e per tenere i pesi del modello più basso di loss
             if val_loss_avg <= best_val_loss:
                 best_val_loss = val_loss_avg
                 epochs_no_improve = 0
                 best_model_state = model.state_dict()
+                torch.save(model.state_dict(), 'epoch{}-batch{}-size{}-loss{}'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS) + '/best_saved_model_TransKeyR-epoch{}-batch{}-size{}-loss{}.pth'.format(PARAM_EPOCHS,PARAM_BATCH,PARAM_H,PARAM_LOSS))
             else:
                 epochs_no_improve +=1
                 if epochs_no_improve == patience:
@@ -1208,7 +1219,9 @@ def main():
 
     # Tracciamento sdr
     plt.figure(figsize=(10, 5))
-    plt.plot(metric_sdr, label = 'sdr')
+    plt.plot(metric_sdr_at05, label = 'sdr@0.5%')
+    plt.plot(metric_sdr_at1, label = 'sdr@1.0%')
+    plt.plot(metric_sdr_at5, label = 'sdr@5.0%')
     plt.xlabel('Epochs')
     plt.ylabel('Percentage')
     plt.title('Metric Successful Detection Rate')
