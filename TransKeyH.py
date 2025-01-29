@@ -894,10 +894,7 @@ class TransKeyH(nn.Module):
 
         # Numero di punti di attivazione alti da trovare
         K = 8
-        if self.use_cpu:
-            heatmaps_cpu = heatmaps.detach().cpu().numpy()
-        else:
-            heatmaps_cpu = heatmaps.detach().numpy()
+        heatmaps_cpu = heatmaps.detach().cpu().numpy()
 
         # Trovo gli indici dei K valori più alti (usati per verifica stampa)
         indices = np.unravel_index(np.argsort(heatmaps_cpu.ravel())[-K:], heatmaps_cpu.shape)
@@ -1050,12 +1047,8 @@ def generate_heatmaps_batch(batch, H, W):
 
 def stampa_mappa(heatMap, image, t, use_cpu = False):
 
-    if use_cpu:
-        hm = heatMap.cpu().detach().numpy()
-        image = image.cpu().detach().numpy()[0]
-    else:
-        hm = heatMap.detach().numpy()
-        image = image.detach().numpy()[0]
+    hm = heatMap.cpu().detach().numpy()
+    image = image.cpu().detach().numpy()[0]
 
     nrows = 4  # Numero di righe di sottotrame
     ncols = 4  # Numero di colonne di sottotrame
@@ -1537,10 +1530,7 @@ def main():
             distanze_totali = torch.cat(distanze_totali, dim=0)
 
             # Calcola la metrica media per ciascun keypoint su tutti i dati
-            if use_cpu:
-                metriche_per_keypoint = distanze_totali.mean(dim=0).cpu().numpy() *100
-            else:
-                metriche_per_keypoint = distanze_totali.mean(dim=0).numpy() *100
+            metriche_per_keypoint = distanze_totali.mean(dim=0).cpu().numpy() *100
 
             # Stampa la metrica media per ciascun keypoint
             print(f"\nPrecisione per ogni keypoint con soglia pari a {soglia_at1} pixel (@1.0%): ")
