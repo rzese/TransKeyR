@@ -43,6 +43,8 @@ PARAM_H = int(sys.argv[3])
 PARAM_W = int(sys.argv[3])
 PARAM_LOSS = sys.argv[4]
 
+NUM_HR_BLOCKS = 1
+
 
 STAT = {'png': 0, 'jpg': 0, 'grayscale': 0}
 
@@ -621,29 +623,31 @@ class TransKeyH(nn.Module):
              'NUM_CHANNELS': [32,64], 'BLOCK': 'BASIC', 'FUSE_METHOD': 'SUM'},
             num_channels)
 
-        num_channels = [32, 64, 128]
-        block = self.blocks_dict['BASIC']
-        num_channels = [
-            num_channels[i] * block.expansion for i in range(len(num_channels))
-        ]
-        self.transition2 = self._make_transition_layer(
-            pre_stage_channels, num_channels)
-        self.stage3, pre_stage_channels = self._make_stage(
-            {'NUM_MODULES':1, 'NUM_BRANCHES': 3, 'NUM_BLOCKS': [4,4,4],
-             'NUM_CHANNELS': [32,64, 128], 'BLOCK': 'BASIC', 'FUSE_METHOD': 'SUM'},
-            num_channels, multi_scale_output=False)
+        if NUM_HR_BLOCKS > 1:
+            num_channels = [32, 64, 128]
+            block = self.blocks_dict['BASIC']
+            num_channels = [
+                num_channels[i] * block.expansion for i in range(len(num_channels))
+            ]
+            self.transition2 = self._make_transition_layer(
+                pre_stage_channels, num_channels)
+            self.stage3, pre_stage_channels = self._make_stage(
+                {'NUM_MODULES':1, 'NUM_BRANCHES': 3, 'NUM_BLOCKS': [4,4,4],
+                 'NUM_CHANNELS': [32,64, 128], 'BLOCK': 'BASIC', 'FUSE_METHOD': 'SUM'},
+                num_channels, multi_scale_output=False)
 
-        #num_channels = [32, 64, 128, 256]
-        #block = self.blocks_dict['BASIC']
-        #num_channels = [
-        #    num_channels[i] * block.expansion for i in range(len(num_channels))
-        #]
-        #self.transition3 = self._make_transition_layer(
-        #    pre_stage_channels, num_channels)
-        #self.stage4, pre_stage_channels = self._make_stage(
-        #    {'NUM_MODULES':1, 'NUM_BRANCHES': 4, 'NUM_BLOCKS': [4,4,4,4],
-        #     'NUM_CHANNELS': [32, 64, 128, 256], 'BLOCK': 'BASIC', 'FUSE_METHOD': 'SUM'},
-        #    num_channels, multi_scale_output=False)
+        if NUM_HR_BLOCKS > 2:
+            num_channels = [32, 64, 128, 256]
+            block = self.blocks_dict['BASIC']
+            num_channels = [
+                num_channels[i] * block.expansion for i in range(len(num_channels))
+            ]
+            self.transition3 = self._make_transition_layer(
+                pre_stage_channels, num_channels)
+            self.stage4, pre_stage_channels = self._make_stage(
+                {'NUM_MODULES':1, 'NUM_BRANCHES': 4, 'NUM_BLOCKS': [4,4,4,4],
+                 'NUM_CHANNELS': [32, 64, 128, 256], 'BLOCK': 'BASIC', 'FUSE_METHOD': 'SUM'},
+                num_channels, multi_scale_output=False)
 
 
 
@@ -933,13 +937,23 @@ class TransKeyH(nn.Module):
                 x_list.append(x)
         y_list = self.stage2(x_list)
 
-        x_list = []
-        for i in range(3):
-            if self.transition2[i] is not None:
-                x_list.append(self.transition2[i](y_list[-1]))
-            else:
-                x_list.append(y_list[i])
-        y_list = self.stage3(x_list)
+        if NUM_HR_BLOCKS > 1:
+            x_list = []
+            for i in range(3):
+                if self.transition2[i] is not None:
+                    x_list.append(self.transition2[i](y_list[-1]))
+                else:
+                    x_list.append(y_list[i])
+            y_list = self.stage3(x_list)
+
+        if NUM_HR_BLOCKS > 2:
+            x_list = []
+            for i in range(3):
+                if self.transition3[i] is not None:
+                    x_list.append(self.transition3[i](y_list[-1]))
+                else:
+                    x_list.append(y_list[i])
+            y_list = self.stage4(x_list)
 
         x = self.reduce(y_list[0])
         bs, c, h, w = x.shape
