@@ -686,7 +686,7 @@ class FusedMBConv(nn.Module):
 
 
 class TransKeyE(nn.Module):
-    def __init__(self, inverted_residual_setting, BN_MOMENTUM, W, H, use_cpu = False):
+    def __init__(self, BN_MOMENTUM, W, H, use_cpu = False):
         self.inplanes = 64
         self.deconv_with_bias = False
 
@@ -1221,17 +1221,8 @@ def stampa_metric_key(metric_key):
 def get_there_model(model_path, BN_MOMENTUM, W, H, use_cpu = False):
     if os.path.isfile(model_path):
 
-        efficientnet_spec = [
-            FusedMBConvConfig(1, 3, 1, 24, 24, 2),
-            FusedMBConvConfig(4, 3, 2, 24, 48, 4),
-            FusedMBConvConfig(4, 3, 2, 48, 64, 4),
-            MBConvConfig(4, 3, 2, 64, 128, 6),
-            MBConvConfig(6, 3, 1, 128, 160, 9),
-            MBConvConfig(6, 3, 2, 160, 256, 15),
-        ]
-
         # Carico il modello TransKeyE
-        model = TransKeyE(efficientnet_spec, BN_MOMENTUM, W, H, use_cpu)
+        model = TransKeyE(BN_MOMENTUM, W, H, use_cpu)
 
         # Carico i pesi del modello
         state_dict = torch.load(model_path)
@@ -1240,19 +1231,8 @@ def get_there_model(model_path, BN_MOMENTUM, W, H, use_cpu = False):
         print("Loaded model from {}".format(model_path))
 
     else:
-        efficientnet_spec = [
-            FusedMBConvConfig(1, 3, 1, 24, 24, 2),
-            FusedMBConvConfig(4, 3, 2, 24, 48, 4),
-            FusedMBConvConfig(4, 3, 2, 48, 64, 4),
-            MBConvConfig(4, 3, 2, 64, 128, 6),
-            MBConvConfig(6, 3, 1, 128, 160, 9),
-            MBConvConfig(6, 3, 2, 160, 256, 15),
-        ]
-
-
-
-        # Carico il modello TransKeyE
-        model = TransKeyE(efficientnet_spec, BN_MOMENTUM, W, H, use_cpu)
+       # Carico il modello TransKeyE
+        model = TransKeyE(BN_MOMENTUM, W, H, use_cpu)
 
         # Salva i pesi originali del modello
         original_state_dict = copy.deepcopy(model.state_dict())
